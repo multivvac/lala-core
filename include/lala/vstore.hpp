@@ -371,9 +371,16 @@ public:
   CUDA const universe_type& operator[](AVar x) const {
     return project(x);
   }
+  CUDA universe_type& at(int x) {
+    return data[x];
+  }
 
   CUDA void meet_bot() {
     is_at_bot.join_top();
+  }
+
+  CUDA void reset_bot() {
+    is_at_bot = false;
   }
 
   /** Given an abstract variable `v`, `embed(VID(v), dom)` will update the domain of this variable with the new information `dom`.
