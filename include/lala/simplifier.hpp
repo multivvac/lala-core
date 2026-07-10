@@ -620,7 +620,7 @@ public:
             break;
           }
           default:
-            printf("Unsupported operator %s in TNF algebraic simplification.\n", string_of_sig(sig));
+            break;
         }
       }
     }

@@ -408,7 +408,7 @@ public:
  * TPB: the number of threads per block.
 */
 template <int TPB, class A>
-__device__ local::B warp_fixpoint(A& a, int i, int* warp_iterations) {
+__device__ __noinline__ local::B warp_fixpoint(A& a, int i, int* warp_iterations) {
   auto ded = a.load_deduce(i);
   local::B has_changed = false;
   __shared__ bool warp_changed[TPB/32];

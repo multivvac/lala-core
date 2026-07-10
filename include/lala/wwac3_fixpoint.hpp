@@ -96,9 +96,8 @@ __device__ int wwac3_fixpoint(
   // fixpoint, exactly as in WAC3. Out-of-range lanes (last partial tile) skip.
   #define WWAC3_PROCESS_TILE(T)                                                  \
     do {                                                                         \
-      int _bidx = (T) * 32 + lane;                                              \
-      if(_bidx < num_bytecodes) {                                              \
-        auto _ded = iprop.load_deduce(_bidx);                                  \
+      if(((T) * 32 + lane) < num_bytecodes) {                                              \
+        auto _ded = iprop.load_deduce(((T) * 32 + lane));                                  \
         int _mask = 0, _m;                                                      \
         while((_m = iprop.deduce_with_mask(_ded)) && !iprop.is_bot()) { _mask |= _m; } \
         if((_mask & 1) && atomicExch(&var_dirty[_ded.x.vid()], 1) == 0)         \
@@ -115,7 +114,7 @@ __device__ int wwac3_fixpoint(
   __syncthreads();
   for(int d = threadIdx.x; d < dirty_count; d += TPB) {
     auto v = dirty_list[d];
-    var_dirty[v] = 0;
+    atomicExch(&var_dirty[v], 0);  // atomic: see in_next clear comment in rounds-2+ loop
     for(int j = vt_off[v]; j < vt_off[v + 1]; ++j) {
       auto t = vt[j];
       if(atomicExch(&in_next[t], 1) == 0) cur[atomicAdd(&nsize, 1)] = t;
@@ -138,14 +137,21 @@ __device__ int wwac3_fixpoint(
 
     for(int k = wid; k < fsize; k += NW) {
       int t = cur[k];
-      if(lane == 0) in_next[t] = 0;       // allow this tile to be re-queued
+      // Re-allow this tile to be enqueued by Phase 2 of the same/subsequent
+      // round. MUST be atomic: a plain `in_next[t] = 0` mixed with the
+      // atomicExch reads on the same address below is UB on CUDA's relaxed
+      // memory model, and ptxas/nvcc actually elide the store — leaving
+      // `in_next[t]=1` stale and dropping the tile from any re-enqueue,
+      // which under-propagates and falls short of fixpoint. Same rule applies
+      // to the var_dirty clears in Phase 2 and the bot-exit in_next clear.
+      if(lane == 0) atomicExch(&in_next[t], 0);
       WWAC3_PROCESS_TILE(t);
     }
     __syncthreads();
 
     for(int d = threadIdx.x; d < dirty_count; d += TPB) {
       auto v = dirty_list[d];
-      var_dirty[v] = 0;
+      atomicExch(&var_dirty[v], 0);  // atomic: see in_next clear comment in rounds-2+ loop
       for(int j = vt_off[v]; j < vt_off[v + 1]; ++j) {
         auto t = vt[j];
         if(atomicExch(&in_next[t], 1) == 0) nxt[atomicAdd(&nsize, 1)] = t;
@@ -165,10 +171,13 @@ __device__ int wwac3_fixpoint(
   }
 
   // Bot-exit cleanup: restore the persistent `in_next` to all-zero so the next
-  // call's precondition holds (mirrors WAC3's bot-exit tail).
+  // call's precondition holds (mirrors WAC3's bot-exit tail). atomic clear —
+  // same UB rule as the in_next/var_dirty clears above: a plain store mixed
+  // with the next call's atomicExch read on the same address gets elided by
+  // ptxas/nvcc on the relaxed memory model.
   if(iprop.is_bot()) {
     for(int k = threadIdx.x; k < fsize; k += TPB) {
-      in_next[cur[k]] = 0;
+      atomicExch(&in_next[cur[k]], 0);
     }
   }
 
